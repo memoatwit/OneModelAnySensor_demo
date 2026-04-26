@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>One Model, Any Sensor — Audio Demos</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; max-width: 1000px; margin: 0 auto; padding: 2rem; color: #333; line-height: 1.6; }
+  h1 { font-size: 1.5rem; border-bottom: 2px solid #2563eb; padding-bottom: 0.5rem; }
+  h2 { font-size: 1.2rem; margin-top: 2.5rem; color: #1e40af; }
+  .note { background: #f0f9ff; border-left: 4px solid #2563eb; padding: 0.75rem 1rem; margin: 1rem 0; font-size: 0.9rem; }
+  .warn { background: #fef3c7; border-left: 4px solid #d97706; padding: 0.75rem 1rem; margin: 1rem 0; font-size: 0.9rem; }
+  table { border-collapse: collapse; width: 100%; margin: 1rem 0; }
+  th, td { border: 1px solid #ddd; padding: 0.5rem; text-align: center; font-size: 0.85rem; }
+  th { background: #f8fafc; font-weight: 600; }
+  td:first-child { text-align: left; font-weight: 500; min-width: 160px; }
+  audio { width: 100%; min-width: 120px; height: 32px; }
+  .caption { font-size: 0.8rem; color: #666; margin-top: 0.25rem; }
+  .fig { text-align: center; margin: 1.5rem 0; }
+  .fig img { max-width: 100%; border: 1px solid #e5e7eb; border-radius: 4px; }
+  .fig .figcap { font-size: 0.8rem; color: #555; margin-top: 0.4rem; max-width: 700px; display: inline-block; text-align: left; }
+  .arch-box { background: #f8fafc; border: 1px solid #e5e7eb; border-radius: 6px; padding: 1rem 1.2rem; margin: 1rem 0; font-size: 0.88rem; }
+  .arch-box pre { margin: 0.5rem 0 0 0; font-size: 0.82rem; line-height: 1.5; background: #fff; padding: 0.75rem; border-radius: 4px; overflow-x: auto; }
+  .metrics-table { font-size: 0.82rem; }
+  .metrics-table td, .metrics-table th { padding: 0.35rem 0.5rem; }
+  footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid #ddd; font-size: 0.8rem; color: #999; }
+</style>
+</head>
+<body>
+
+<h1>One Model, Any Sensor: Heterogeneous Sensor Fusion and Zero-Shot Generalization for Body-Conducted Speech Enhancement</h1>
+
+<p>Audio demonstrations and code for anonymous NeurIPS 2026 submission. All samples are from the <a href="https://huggingface.co/datasets/Cnam-LMSSC/vibravox">VibravOx</a> test set (French speech, unseen speakers). Sample IDs match the dataset for cross-reference.</p>
+
+<div class="note">
+<strong>🎧 Headphones recommended.</strong> Spectral artifacts are most audible on headphones. Samples are in French; audio quality differences are perceptible regardless of language comprehension.
+</div>
+
+<div class="note">
+<strong>Sample selection.</strong> Samples were selected programmatically to maximize audible differences between conditions, not cherry-picked. For each demo, we scored all available test samples by a relevant metric and selected the top candidates:
+<ul style="margin:0.5rem 0 0 0;">
+<li><em>Amplitude drift:</em> Ranked by log-spectral distance contrast between amplitude-stable and drifted models.</li>
+<li><em>Fusion:</em> Ranked by SI-SDR improvement of the 5-sensor model over unprocessed input on noisy speech (E2).</li>
+<li><em>LOO zero-shot:</em> Ranked by SI-SDR gap between full 5-sensor and forehead-held-out configurations, filtering for positive LOO SI-SDR (graceful degradation, not failure).</li>
+</ul>
+</div>
+
+<!-- ============================================================ -->
+<h2>Architecture Overview</h2>
+
+<div class="arch-box">
+<p>Body-conducted microphones (throat, temple, forehead, in-ear) capture speech through tissue and bone vibration. The signals are noisy and bandwidth-limited. Our model fuses any subset of these heterogeneous sensors into clean airborne-quality speech.</p>
+<pre>
+Input: (B, S, T) — S sensors, each a mono waveform at 16 kHz
+
+For each sensor s:
+    h_s = GELU(Conv1d(x_s))           # shared frontend (same weights for all sensors)
+    h_s = γ(e_s) ⊙ h_s + β(e_s)      # FiLM conditioning on learned sensor embedding
+
+Sensor dropout: randomly zero sensors during training (p=0.5, min_keep=1)
+Cross-attention across sensor tokens (optional)
+Mean pooling across sensors → (B, T, D)
+
+8× MambaBlock (pre-norm residual, causal, O(1) memory per step)
+    Optional: gated STFT spectral injection at layers [1, 3, 5]
+
+LayerNorm → Conv1d(D, 1) + skip connection → (B, 1, T) enhanced output
+</pre>
+<p style="font-size:0.85rem; margin-top:0.5rem;"><strong>3.9M parameters</strong> (base) / <strong>5.1M</strong> (with STFT branch). Real-time on a single GPU. Causal Mamba backbone enables streaming inference.</p>
+</div>
+
+<!-- ============================================================ -->
+<h2>1. Amplitude Drift: The Scale-Invariant Loss Failure Mode</h2>
+
+<p>SI-SDR, the standard loss for speech enhancement, is scale-invariant — it ignores absolute output amplitude. When input and target have different natural amplitudes (as in body-conducted → airborne conversion), this causes <em>amplitude drift</em>: the model learns correct waveform shape at incorrect scale, producing spectral distortion and crackling artifacts.</p>
+
+<p>The figure below (from the paper) shows per-sample amplitude ratios. SI-SDR-trained models drift to up to 8.4× reference amplitude. The audio exports below use target-based normalization, so the amplitude is corrected — but the <strong>spectral distortion from training at incorrect amplitude is preserved</strong> and audible as crackling and harshness.</p>
+
+<div class="fig">
+<img src="figures/amplitude_drift.png" alt="Amplitude drift across loss functions" style="max-width:700px;">
+<div class="figcap"><strong>Figure (from paper):</strong> Per-sample output/reference amplitude ratio (200 validation samples). Green band = acceptable [0.8×, 1.2×]. SI-SDR-trained models (C5, AA6a) drift to ~8× reference amplitude. Wang L1 (Ours-V1) stays within band; MRSTFT (Ours-V3) shows mild drift.</div>
+</div>
+
+<table>
+<tr>
+  <th>Model</th>
+  <th>#0009 (4.8s)</th>
+  <th>#0011 (3.0s)</th>
+  <th>#0005 (5.4s)</th>
+  <th>#0003 (5.1s)</th>
+</tr>
+<tr>
+  <td>Input (body-conducted)</td>
+  <td><audio controls src="audio/amplitude_drift/sample_0009_input.wav"></audio></td>
+  <td><audio controls src="audio/amplitude_drift/sample_0011_input.wav"></audio></td>
+  <td><audio controls src="audio/amplitude_drift/sample_0005_input.wav"></audio></td>
+  <td><audio controls src="audio/amplitude_drift/sample_0003_input.wav"></audio></td>
+</tr>
+<tr>
+  <td>Reference (airborne mic)</td>
+  <td><audio controls src="audio/amplitude_drift/sample_0009_reference.wav"></audio></td>
+  <td><audio controls src="audio/amplitude_drift/sample_0011_reference.wav"></audio></td>
+  <td><audio controls src="audio/amplitude_drift/sample_0005_reference.wav"></audio></td>
+  <td><audio controls src="audio/amplitude_drift/sample_0003_reference.wav"></audio></td>
+</tr>
+<tr>
+  <td><strong>Ours (Wang L1 loss)</strong><br><span class="caption">Amplitude-stable ✓</span></td>
+  <td><audio controls src="audio/amplitude_drift/sample_0009_V1_wang.wav"></audio></td>
+  <td><audio controls src="audio/amplitude_drift/sample_0011_V1_wang.wav"></audio></td>
+  <td><audio controls src="audio/amplitude_drift/sample_0005_V1_wang.wav"></audio></td>
+  <td><audio controls src="audio/amplitude_drift/sample_0003_V1_wang.wav"></audio></td>
+</tr>
+<tr>
+  <td><strong>Ours (MRSTFT loss)</strong><br><span class="caption">Mild drift, best WER</span></td>
+  <td><audio controls src="audio/amplitude_drift/sample_0009_V3_mrstft.wav"></audio></td>
+  <td><audio controls src="audio/amplitude_drift/sample_0011_V3_mrstft.wav"></audio></td>
+  <td><audio controls src="audio/amplitude_drift/sample_0005_V3_mrstft.wav"></audio></td>
+  <td><audio controls src="audio/amplitude_drift/sample_0003_V3_mrstft.wav"></audio></td>
+</tr>
+<tr>
+  <td>SI-SDR + HiFi-GAN<br><span class="caption">Drifted (−18.9 dB) ✗</span></td>
+  <td><audio controls src="audio/amplitude_drift/sample_0009_C5_drifted.wav"></audio></td>
+  <td><audio controls src="audio/amplitude_drift/sample_0011_C5_drifted.wav"></audio></td>
+  <td><audio controls src="audio/amplitude_drift/sample_0005_C5_drifted.wav"></audio></td>
+  <td><audio controls src="audio/amplitude_drift/sample_0003_C5_drifted.wav"></audio></td>
+</tr>
+<tr>
+  <td>SI-SDR + 0.05×L1<br><span class="caption">Drifted (−18.2 dB) ✗</span></td>
+  <td><audio controls src="audio/amplitude_drift/sample_0009_AA6a_drifted.wav"></audio></td>
+  <td><audio controls src="audio/amplitude_drift/sample_0011_AA6a_drifted.wav"></audio></td>
+  <td><audio controls src="audio/amplitude_drift/sample_0005_AA6a_drifted.wav"></audio></td>
+  <td><audio controls src="audio/amplitude_drift/sample_0003_AA6a_drifted.wav"></audio></td>
+</tr>
+</table>
+
+<!-- ============================================================ -->
+<h2>2. Multi-Sensor Fusion (Noisy Speech)</h2>
+
+<p>Body-conducted signals are bandwidth-limited and spectrally distorted — listen to the "Input" row to hear what the model receives. Different sensors capture complementary information: in-ear mics have the best bandwidth, the laryngophone captures voicing, and the forehead accelerometer provides onset energy. Fusing all five produces dramatically cleaner output than any single sensor.</p>
+
+<table class="metrics-table" style="max-width:500px; margin: 0.5rem 0;">
+<tr><th>Model</th><th>Sensors</th><th>E1 WER</th><th>E2 WER</th></tr>
+<tr><td>Best single-sensor (Mamba)</td><td>1</td><td>10.19%</td><td>33.95%</td></tr>
+<tr><td>D5 Wang (single-sensor)</td><td>1</td><td>6.10%</td><td>9.52%</td></tr>
+<tr><td><strong>Ours — 5-sensor fusion</strong></td><td><strong>5</strong></td><td><strong>5.78%</strong></td><td><strong>7.58%</strong></td></tr>
+</table>
+
+<table>
+<tr>
+  <th>Model</th>
+  <th>#0096 (4.1s)</th>
+  <th>#0006 (3.7s)</th>
+  <th>#0143 (4.6s)</th>
+  <th>#0032 (3.5s)</th>
+</tr>
+<tr>
+  <td>Input (body-conducted, noisy)</td>
+  <td><audio controls src="audio/fusion/sample_0096_input.wav"></audio></td>
+  <td><audio controls src="audio/fusion/sample_0006_input.wav"></audio></td>
+  <td><audio controls src="audio/fusion/sample_0143_input.wav"></audio></td>
+  <td><audio controls src="audio/fusion/sample_0032_input.wav"></audio></td>
+</tr>
+<tr>
+  <td>Reference (airborne mic)</td>
+  <td><audio controls src="audio/fusion/sample_0096_reference.wav"></audio></td>
+  <td><audio controls src="audio/fusion/sample_0006_reference.wav"></audio></td>
+  <td><audio controls src="audio/fusion/sample_0143_reference.wav"></audio></td>
+  <td><audio controls src="audio/fusion/sample_0032_reference.wav"></audio></td>
+</tr>
+<tr>
+  <td>D5 Wang (1 sensor)<br><span class="caption">WER: 9.52%</span></td>
+  <td><audio controls src="audio/fusion/sample_0096_D5_single.wav"></audio></td>
+  <td><audio controls src="audio/fusion/sample_0006_D5_single.wav"></audio></td>
+  <td><audio controls src="audio/fusion/sample_0143_D5_single.wav"></audio></td>
+  <td><audio controls src="audio/fusion/sample_0032_D5_single.wav"></audio></td>
+</tr>
+<tr>
+  <td><strong>Ours (5 sensors)</strong><br><span class="caption">WER: 7.58%</span></td>
+  <td><audio controls src="audio/fusion/sample_0096_V3_5sensor.wav"></audio></td>
+  <td><audio controls src="audio/fusion/sample_0006_V3_5sensor.wav"></audio></td>
+  <td><audio controls src="audio/fusion/sample_0143_V3_5sensor.wav"></audio></td>
+  <td><audio controls src="audio/fusion/sample_0032_V3_5sensor.wav"></audio></td>
+</tr>
+</table>
+
+<!-- ============================================================ -->
+<h2>3. Leave-One-Out Zero-Shot Sensor Generalization (Noisy Speech)</h2>
+
+<p>The model generalizes to held-out sensor types <em>without retraining</em> — the same weights are used, only the input sensor subset changes. Sensor dropout during training acts as implicit meta-learning over the combinatorial space of sensor subsets. Below: the same model with all 5 sensors vs. with one sensor excluded at inference.</p>
+
+<div class="fig">
+<img src="figures/graceful_degradation.png" alt="Graceful degradation" style="max-width:700px;">
+<div class="figcap"><strong>Figure (from paper):</strong> WER distribution over all sensor subsets at each subset size k. Performance degrades gracefully from k=5 (7.58%) to k=4 (median 12.45%). All k=4 subsets outperform the best single-sensor baseline (27.88%, dashed line).</div>
+</div>
+
+<table>
+<tr>
+  <th>Model</th>
+  <th>#0078 (3.9s)</th>
+  <th>#0081 (4.0s)</th>
+  <th>#0039 (4.1s)</th>
+  <th>#0096 (4.1s)</th>
+</tr>
+<tr>
+  <td>Input (body-conducted, noisy)</td>
+  <td><audio controls src="audio/loo_zero_shot/sample_0078_input.wav"></audio></td>
+  <td><audio controls src="audio/loo_zero_shot/sample_0081_input.wav"></audio></td>
+  <td><audio controls src="audio/loo_zero_shot/sample_0039_input.wav"></audio></td>
+  <td><audio controls src="audio/loo_zero_shot/sample_0096_input.wav"></audio></td>
+</tr>
+<tr>
+  <td>Reference (airborne mic)</td>
+  <td><audio controls src="audio/loo_zero_shot/sample_0078_reference.wav"></audio></td>
+  <td><audio controls src="audio/loo_zero_shot/sample_0081_reference.wav"></audio></td>
+  <td><audio controls src="audio/loo_zero_shot/sample_0039_reference.wav"></audio></td>
+  <td><audio controls src="audio/loo_zero_shot/sample_0096_reference.wav"></audio></td>
+</tr>
+<tr>
+  <td><strong>Ours — all 5 sensors</strong><br><span class="caption">WER: 7.58%</span></td>
+  <td><audio controls src="audio/loo_zero_shot/sample_0078_V3_full.wav"></audio></td>
+  <td><audio controls src="audio/loo_zero_shot/sample_0081_V3_full.wav"></audio></td>
+  <td><audio controls src="audio/loo_zero_shot/sample_0039_V3_full.wav"></audio></td>
+  <td><audio controls src="audio/loo_zero_shot/sample_0096_V3_full.wav"></audio></td>
+</tr>
+<tr>
+  <td>Forehead accel. held out<br><span class="caption">WER: 16.14% (hardest)</span></td>
+  <td><audio controls src="audio/loo_zero_shot/sample_0078_loo_forehead.wav"></audio></td>
+  <td><audio controls src="audio/loo_zero_shot/sample_0081_loo_forehead.wav"></audio></td>
+  <td><audio controls src="audio/loo_zero_shot/sample_0039_loo_forehead.wav"></audio></td>
+  <td><audio controls src="audio/loo_zero_shot/sample_0096_loo_forehead.wav"></audio></td>
+</tr>
+<tr>
+  <td>Soft in-ear mic held out<br><span class="caption">WER: 11.61%</span></td>
+  <td><audio controls src="audio/loo_zero_shot/sample_0078_loo_soft_inear.wav"></audio></td>
+  <td><audio controls src="audio/loo_zero_shot/sample_0081_loo_soft_inear.wav"></audio></td>
+  <td><audio controls src="audio/loo_zero_shot/sample_0039_loo_soft_inear.wav"></audio></td>
+  <td><audio controls src="audio/loo_zero_shot/sample_0096_loo_soft_inear.wav"></audio></td>
+</tr>
+<tr>
+  <td>Throat mic held out<br><span class="caption">WER: 11.33%</span></td>
+  <td><audio controls src="audio/loo_zero_shot/sample_0078_loo_throat.wav"></audio></td>
+  <td><audio controls src="audio/loo_zero_shot/sample_0081_loo_throat.wav"></audio></td>
+  <td><audio controls src="audio/loo_zero_shot/sample_0039_loo_throat.wav"></audio></td>
+  <td><audio controls src="audio/loo_zero_shot/sample_0096_loo_throat.wav"></audio></td>
+</tr>
+</table>
+
+<p class="caption">All LOO configurations exceed the best single-sensor baseline (27.88% WER). Sample IDs correspond to the <a href="https://huggingface.co/datasets/Cnam-LMSSC/vibravox">VibravOx dataset</a> <code>speech_noisy</code> test split.</p>
+
+<!-- ============================================================ -->
+<h2>4. Learned Sensor Embeddings</h2>
+
+<div class="fig">
+<img src="figures/sensor_embeddings.png" alt="Sensor embedding cosine similarity" style="max-width:600px;">
+<div class="figcap"><strong>Figure (from paper):</strong> Cosine similarity between learned sensor embeddings. All pairwise similarities are near zero (|cos| &lt; 0.17), indicating the model learns nearly orthogonal representations for each sensor type — maximally distinguishing their transfer functions rather than clustering physically similar sensors.</div>
+</div>
+
+<!-- ============================================================ -->
+<h2>Code</h2>
+
+<p>Self-contained model architecture and inference script:</p>
+<ul>
+  <li><a href="code/model.py"><code>model.py</code></a> &mdash; Full sensor-agnostic architecture: shared Conv1d frontend, FiLM conditioning, cross-attention, sensor dropout, Mamba backbone, optional parallel STFT branch with gated spectral injection. No external dependencies beyond PyTorch and <code>mamba-ssm</code>.</li>
+  <li><a href="code/inference.py"><code>inference.py</code></a> &mdash; Load a checkpoint and enhance any combination of sensor WAV files.</li>
+</ul>
+
+<pre style="background:#f8fafc; padding:0.75rem; border-radius:4px; font-size:0.82rem; overflow-x:auto;">
+pip install torch torchaudio mamba-ssm
+
+python code/inference.py \
+    --checkpoint model.pt \
+    --input throat.wav temple.wav forehead.wav \
+    -o enhanced.wav
+</pre>
+
+<p>Full training code and pretrained checkpoints will be released upon acceptance.</p>
+
+<footer>
+Anonymous submission to NeurIPS 2026. Audio from the <a href="https://huggingface.co/datasets/Cnam-LMSSC/vibravox">VibravOx corpus</a> (French speech, 188 speakers, unseen test split).
+</footer>
+
+</body>
+</html>
