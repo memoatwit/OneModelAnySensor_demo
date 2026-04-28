@@ -28,7 +28,7 @@
 </head>
 <body>
 
-<h1>One Model, Any Sensor: Heterogeneous Sensor Fusion and Zero-Shot Generalization for Body-Conducted Speech Enhancement</h1>
+<h1>One Model, Any Sensor: Sensor Fusion and Few-Shot Generalization for Body-Conducted Speech Enhancement</h1>
 
 <p>Audio demonstrations and code for anonymous NeurIPS 2026 submission. All samples are from the <a href="https://huggingface.co/datasets/Cnam-LMSSC/vibravox">VibravOx</a> test set (French speech, unseen speakers). Sample IDs match the dataset for cross-reference.</p>
 
@@ -138,11 +138,11 @@ LayerNorm → Conv1d(D, 1) + skip connection → (B, 1, T) enhanced output
 
 <p>Body-conducted signals are bandwidth-limited and spectrally distorted — listen to the "Input" row to hear what the model receives. Different sensors capture complementary information: in-ear mics have the best bandwidth, the laryngophone captures voicing, and the forehead accelerometer provides onset energy. Fusing all five produces dramatically cleaner output than any single sensor.</p>
 
-<table class="metrics-table" style="max-width:500px; margin: 0.5rem 0;">
-<tr><th>Model</th><th>Sensors</th><th>E1 WER</th><th>E2 WER</th></tr>
-<tr><td>Best single-sensor (Mamba)</td><td>1</td><td>10.19%</td><td>33.95%</td></tr>
-<tr><td>D5 Wang (single-sensor)</td><td>1</td><td>6.10%</td><td>9.52%</td></tr>
-<tr><td><strong>Ours — 5-sensor fusion</strong></td><td><strong>5</strong></td><td><strong>5.78%</strong></td><td><strong>7.58%</strong></td></tr>
+<table class="metrics-table" style="max-width:600px; margin: 0.5rem 0;">
+<tr><th>Model</th><th>Sensors</th><th>E1 WER</th><th>E2 WER</th><th></th></tr>
+<tr><td>Best single-sensor (Mamba)</td><td>1</td><td>10.19%</td><td>33.95%</td><td></td></tr>
+<tr><td>D5 Wang (single-sensor, same loss family)</td><td>1</td><td>6.10%</td><td>9.52%</td><td></td></tr>
+<tr><td><strong>Ours — 5-sensor fusion (V3)</strong></td><td><strong>5</strong></td><td><strong>5.78%</strong></td><td><strong>7.58%</strong></td><td><em>p</em>=0.004 vs D5</td></tr>
 </table>
 
 <table>
@@ -248,7 +248,33 @@ LayerNorm → Conv1d(D, 1) + skip connection → (B, 1, T) enhanced output
 <p class="caption">All LOO configurations exceed the best single-sensor baseline (27.88% WER). Sample IDs correspond to the <a href="https://huggingface.co/datasets/Cnam-LMSSC/vibravox">VibravOx dataset</a> <code>speech_noisy</code> test split.</p>
 
 <!-- ============================================================ -->
-<h2>4. Learned Sensor Embeddings</h2>
+<h2>4. Few-Shot Sensor Adaptation</h2>
+
+<p>When a new sensor type becomes available, how much data is needed to integrate it? We evaluate a three-stage generalization hierarchy:</p>
+
+<ol>
+  <li><strong>Unknown type</strong> — The model has never seen this sensor. Uses an out-of-vocabulary embedding + zeroed input. Relies entirely on the remaining 4 sensors.</li>
+  <li><strong>Known type</strong> — The sensor type is identified (e.g., "forehead accelerometer") but no paired recordings are available. Uses the trained FiLM embedding with zeroed input. The correct modulation helps the model better fuse the remaining sensors.</li>
+  <li><strong>10 min adapted</strong> — Fine-tune only the sensor embedding vector (freeze all other weights) with 10 minutes of paired data. Full 5-sensor performance is recovered.</li>
+</ol>
+
+<table class="metrics-table" style="max-width:650px; margin: 0.5rem 0;">
+<tr><th>Held-Out Sensor</th><th>Unknown</th><th>Known type</th><th>10 min</th><th>30 min</th><th>60 min</th></tr>
+<tr><td>Forehead accel.</td><td>16.14%</td><td>12.37%</td><td><strong>7.58%</strong></td><td>7.63%</td><td>7.75%</td></tr>
+<tr><td>Soft in-ear mic</td><td>11.61%</td><td>8.66%</td><td><strong>7.51%</strong></td><td>7.56%</td><td>7.82%</td></tr>
+<tr><td>Throat mic</td><td>11.33%</td><td>8.74%</td><td><strong>7.67%</strong></td><td>7.56%</td><td>7.74%</td></tr>
+<tr><td>Temple pickup</td><td>10.92%</td><td>7.92%</td><td><strong>7.43%</strong></td><td>7.74%</td><td>7.66%</td></tr>
+<tr><td>Rigid in-ear mic</td><td>10.51%</td><td>8.27%</td><td><strong>7.56%</strong></td><td>7.76%</td><td>7.74%</td></tr>
+</table>
+
+<p style="font-size:0.88rem;"><strong>Key findings:</strong> 10 minutes of paired data is sufficient — all sensors converge to ~7.5% WER, matching the full 5-sensor model (7.58%). Additional data (30/60 min) provides no further improvement. Merely knowing the sensor type ("Known type" column) provides substantial improvement over the unknown baseline (e.g., forehead: 16.14% → 12.37%), because the correct FiLM modulation helps the model better weight the remaining sensors even without signal from the held-out channel.</p>
+
+<div class="note">
+<strong>Connection to meta-learning.</strong> Sensor dropout during training implicitly optimizes a meta-learning objective: at each step, the model must perform well on a randomly sampled sensor subset (the "task"). The learned initialization is biased toward representations that are easy to adapt. Fine-tuning a single embedding vector (the "task descriptor") with 10 minutes of data is sufficient because the shared backbone already represents sensor-agnostic speech features.
+</div>
+
+<!-- ============================================================ -->
+<h2>5. Learned Sensor Embeddings</h2>
 
 <div class="fig">
 <img src="figures/sensor_embeddings.png" alt="Sensor embedding cosine similarity" style="max-width:600px;">
@@ -256,7 +282,7 @@ LayerNorm → Conv1d(D, 1) + skip connection → (B, 1, T) enhanced output
 </div>
 
 <!-- ============================================================ -->
-<h2>Code</h2>
+<h2>6. Code</h2>
 
 <p>Self-contained model architecture and inference script:</p>
 <ul>
@@ -267,11 +293,14 @@ LayerNorm → Conv1d(D, 1) + skip connection → (B, 1, T) enhanced output
 <pre style="background:#f8fafc; padding:0.75rem; border-radius:4px; font-size:0.82rem; overflow-x:auto;">
 pip install torch torchaudio mamba-ssm
 
+# Inference with any subset of sensors
 python code/inference.py \
     --checkpoint model.pt \
     --input throat.wav temple.wav forehead.wav \
     -o enhanced.wav
 </pre>
+
+<p style="font-size:0.85rem;">Few-shot adaptation script (fine-tune a single embedding vector with 10 minutes of paired data) will be released upon acceptance.</p>
 
 <p>Full training code and pretrained checkpoints will be released upon acceptance.</p>
 
