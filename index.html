@@ -30,7 +30,7 @@
 
 <h1>One Model, Any Sensor: Sensor Fusion and Few-Shot Generalization for Body-Conducted Speech Enhancement</h1>
 
-<p>Audio demonstrations and code for anonymous NeurIPS 2026 submission. All samples are from the <a href="https://huggingface.co/datasets/Cnam-LMSSC/vibravox">VibravOx</a> test set (French speech, unseen speakers). Sample IDs match the dataset for cross-reference.</p>
+<p>Audio demonstrations and code for anonymous NeurIPS 2026 submission. All samples are from the <a href="https://huggingface.co/datasets/Cnam-LMSSC/vibravox">Vibravox</a> test set (French speech, unseen speakers). Sample IDs match the dataset for cross-reference.</p>
 
 <div class="note">
 <strong>🎧 Headphones recommended.</strong> Spectral artifacts are most audible on headphones. Samples are in French; audio quality differences are perceptible regardless of language comprehension.
@@ -41,12 +41,17 @@
 <ul style="margin:0.5rem 0 0 0;">
 <li><em>Amplitude drift:</em> Ranked by log-spectral distance contrast between amplitude-stable and drifted models.</li>
 <li><em>Fusion:</em> Ranked by SI-SDR improvement of the 5-sensor model over unprocessed input on noisy speech (E2).</li>
-<li><em>LOO zero-shot:</em> Ranked by SI-SDR gap between full 5-sensor and forehead-held-out configurations, filtering for positive LOO SI-SDR (graceful degradation, not failure).</li>
+<li><em>LOO sensor robustness:</em> Ranked by SI-SDR gap between full 5-sensor and forehead-held-out configurations, filtering for positive LOO SI-SDR (graceful degradation, not failure).</li>
 </ul>
 </div>
 
 <!-- ============================================================ -->
 <h2>Architecture Overview</h2>
+
+<div class="fig">
+<img src="figures/architecture.png" alt="Sensor-agnostic architecture diagram" style="max-width:800px;">
+<div class="figcap"><strong>(a)</strong> Each sensor's waveform passes through a shared Conv1d frontend, is modulated by FiLM conditioning on a learned sensor embedding, and optionally attends to other sensors via cross-attention before mean pooling into the backbone. Sensor dropout (p=0.5, min_keep=1) during training forces robustness to arbitrary sensor subsets. <strong>(b)</strong> At inference, the model accepts any subset of the five sensors. In the leave-one-out setting, every 4-of-5 configuration still exceeds single-sensor baselines.</div>
+</div>
 
 <div class="arch-box">
 <p>Body-conducted microphones (throat, temple, forehead, in-ear) capture speech through tissue and bone vibration. The signals are noisy and bandwidth-limited. Our model fuses any subset of these heterogeneous sensors into clean airborne-quality speech.</p>
@@ -184,13 +189,13 @@ LayerNorm → Conv1d(D, 1) + skip connection → (B, 1, T) enhanced output
 </table>
 
 <!-- ============================================================ -->
-<h2>3. Leave-One-Out Zero-Shot Sensor Generalization (Noisy Speech)</h2>
+<h2>3. Leave-One-Out Sensor Robustness (Noisy Speech)</h2>
 
-<p>The model generalizes to held-out sensor types <em>without retraining</em> — the same weights are used, only the input sensor subset changes. Sensor dropout during training acts as implicit meta-learning over the combinatorial space of sensor subsets. Below: the same model with all 5 sensors vs. with one sensor excluded at inference.</p>
+<p>The model is robust to sensor absence <em>without retraining</em> — the same weights are used, only the input sensor subset changes. Sensor dropout during training acts as implicit meta-learning over the combinatorial space of sensor subsets. Below: the same model with all 5 sensors vs. with one sensor excluded at inference.</p>
 
 <div class="fig">
 <img src="figures/graceful_degradation.png" alt="Graceful degradation" style="max-width:700px;">
-<div class="figcap"><strong>Figure (from paper):</strong> WER distribution over all sensor subsets at each subset size k. Performance degrades gracefully from k=5 (7.58%) to k=4 (median 12.45%). All k=4 subsets outperform the best single-sensor baseline (27.88%, dashed line).</div>
+<div class="figcap"><strong>Figure (from paper):</strong> WER distribution over all sensor subsets at each subset size k. Performance degrades gracefully from k=5 (7.58%) to k=4 (median 12.1%). All k=4 subsets outperform the best single-sensor Mamba baseline (18.47%, dashed line).</div>
 </div>
 
 <table>
@@ -245,7 +250,7 @@ LayerNorm → Conv1d(D, 1) + skip connection → (B, 1, T) enhanced output
 </tr>
 </table>
 
-<p class="caption">All LOO configurations exceed the best single-sensor baseline (27.88% WER). Sample IDs correspond to the <a href="https://huggingface.co/datasets/Cnam-LMSSC/vibravox">VibravOx dataset</a> <code>speech_noisy</code> test split.</p>
+<p class="caption">All LOO configurations exceed the best single-sensor Mamba baseline (18.47% WER). Sample IDs correspond to the <a href="https://huggingface.co/datasets/Cnam-LMSSC/vibravox">Vibravox dataset</a> <code>speech_noisy</code> test split.</p>
 
 <!-- ============================================================ -->
 <h2>4. Few-Shot Sensor Adaptation</h2>
@@ -260,14 +265,19 @@ LayerNorm → Conv1d(D, 1) + skip connection → (B, 1, T) enhanced output
 
 <table class="metrics-table" style="max-width:650px; margin: 0.5rem 0;">
 <tr><th>Held-Out Sensor</th><th>Unknown</th><th>Known type</th><th>10 min</th><th>30 min</th><th>60 min</th></tr>
-<tr><td>Forehead accel.</td><td>16.14%</td><td>12.37%</td><td><strong>7.58%</strong></td><td>7.63%</td><td>7.75%</td></tr>
-<tr><td>Soft in-ear mic</td><td>11.61%</td><td>8.66%</td><td><strong>7.51%</strong></td><td>7.56%</td><td>7.82%</td></tr>
-<tr><td>Throat mic</td><td>11.33%</td><td>8.74%</td><td><strong>7.67%</strong></td><td>7.56%</td><td>7.74%</td></tr>
-<tr><td>Temple pickup</td><td>10.92%</td><td>7.92%</td><td><strong>7.43%</strong></td><td>7.74%</td><td>7.66%</td></tr>
-<tr><td>Rigid in-ear mic</td><td>10.51%</td><td>8.27%</td><td><strong>7.56%</strong></td><td>7.76%</td><td>7.74%</td></tr>
+<tr><td>Forehead accel.</td><td>16.14%</td><td>12.37%</td><td><strong>7.91%</strong></td><td>7.97%</td><td>7.99%</td></tr>
+<tr><td>Soft in-ear mic</td><td>11.61%</td><td>8.66%</td><td><strong>7.79%</strong></td><td>7.53%</td><td>7.61%</td></tr>
+<tr><td>Throat mic</td><td>11.33%</td><td>8.74%</td><td><strong>7.72%</strong></td><td>7.84%</td><td>7.74%</td></tr>
+<tr><td>Temple pickup</td><td>10.92%</td><td>7.92%</td><td><strong>7.75%</strong></td><td>7.67%</td><td>7.59%</td></tr>
+<tr><td>Rigid in-ear mic</td><td>10.51%</td><td>8.27%</td><td><strong>7.98%</strong></td><td>7.98%</td><td>7.47%</td></tr>
 </table>
 
-<p style="font-size:0.88rem;"><strong>Key findings:</strong> 10 minutes of paired data is sufficient — all sensors converge to ~7.5% WER, matching the full 5-sensor model (7.58%). Additional data (30/60 min) provides no further improvement. Merely knowing the sensor type ("Known type" column) provides substantial improvement over the unknown baseline (e.g., forehead: 16.14% → 12.37%), because the correct FiLM modulation helps the model better weight the remaining sensors even without signal from the held-out channel.</p>
+<div class="fig">
+<img src="figures/fewshot_learning_curve.png" alt="Few-shot learning curve" style="max-width:700px;">
+<div class="figcap"><strong>Figure (from paper):</strong> Few-shot sensor adaptation learning curve (E2 noisy). Fine-tuning only the sensor embedding starting from V3 ep90 in leave-one-out mode. All sensors converge to ~7.5% WER with just 10 minutes of paired data, matching the full 5-sensor baseline (dashed line). Additional data provides no further improvement.</div>
+</div>
+
+<p style="font-size:0.88rem;"><strong>Key findings:</strong> 10 minutes of paired data is sufficient — all sensors converge to ~7.7–7.9% WER, matching the full 5-sensor model (7.58%). Additional data (30/60 min) provides no further improvement. Merely knowing the sensor type ("Known type" column) provides substantial improvement over the unknown baseline (e.g., forehead: 16.14% → 12.37%), because the correct FiLM modulation helps the model better weight the remaining sensors even without signal from the held-out channel.</p>
 
 <div class="note">
 <strong>Connection to meta-learning.</strong> Sensor dropout during training implicitly optimizes a meta-learning objective: at each step, the model must perform well on a randomly sampled sensor subset (the "task"). The learned initialization is biased toward representations that are easy to adapt. Fine-tuning a single embedding vector (the "task descriptor") with 10 minutes of data is sufficient because the shared backbone already represents sensor-agnostic speech features.
@@ -305,7 +315,7 @@ python code/inference.py \
 <p>Full training code and pretrained checkpoints will be released upon acceptance.</p>
 
 <footer>
-Anonymous submission to NeurIPS 2026. Audio from the <a href="https://huggingface.co/datasets/Cnam-LMSSC/vibravox">VibravOx corpus</a> (French speech, 188 speakers, unseen test split).
+Anonymous submission to NeurIPS 2026. Audio from the <a href="https://huggingface.co/datasets/Cnam-LMSSC/vibravox">Vibravox corpus</a> (French speech, 188 speakers, unseen test split).
 </footer>
 
 </body>

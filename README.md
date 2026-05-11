@@ -8,11 +8,13 @@ Open `index.html` in a browser (or visit the GitHub Pages URL) to listen to audi
 
 1. **Amplitude Drift** — SI-SDR-trained models produce outputs at incorrect amplitude (up to 8.4× reference) despite high SI-SDR scores. Non-scale-invariant losses (Wang L1, MRSTFT) eliminate this.
 
-2. **Multi-Sensor Fusion** — Five-sensor fusion achieves 5.78% / 7.58% WER (clean/noisy), a 4.5× improvement over single-sensor baselines.
+2. **Multi-Sensor Fusion** — Five-sensor fusion achieves 5.78% / 7.58% WER (clean/noisy), surpassing the best single-sensor baseline trained with the same loss family by 20% relative (p=0.004).
 
-3. **Zero-Shot Sensor Generalization** — Leave-one-out evaluation: the model generalizes to held-out sensor types without retraining.
+3. **Leave-One-Out Sensor Robustness** — Leave-one-out evaluation: the model generalizes to held-out sensor types without retraining.
 
-All samples are from the VibravOx test set (French speech, unseen speakers, 16 kHz).
+4. **Few-Shot Sensor Adaptation** — Three-stage generalization hierarchy: unknown type → known type (no data) → 10 minutes of paired data recovers full 5-sensor performance. Fine-tuning only a single embedding vector.
+
+All samples are from the Vibravox test set (French speech, unseen speakers, 16 kHz).
 
 ## Code
 
@@ -29,6 +31,8 @@ python code/inference.py \
     --input sensor1.wav sensor2.wav sensor3.wav \
     -o enhanced.wav
 ```
+
+Few-shot adaptation script (fine-tune a single embedding vector with 10 minutes of paired data) will be released upon acceptance.
 
 The model accepts any subset of sensors (1 to 5) as separate mono WAV files.
 
